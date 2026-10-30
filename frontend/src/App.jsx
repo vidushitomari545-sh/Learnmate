@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  formatUnexpectedUploadResponse,
+  formatUploadFailure,
+  getUploadConnectionError,
+  isExtractedPdfResponse,
+} from "./uploadErrors";
 
 const learningSteps = [
   {
@@ -24,11 +30,33 @@ const learningSteps = [
   },
 ];
 
+const maxUploadSizeMegabytes = 10;
+const maxUploadSizeBytes = maxUploadSizeMegabytes * 1024 * 1024;
+
+function formatFileSize(sizeBytes) {
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function App() {
   const [connection, setConnection] = useState({
     state: "checking",
     message: "Checking the API connection…",
   });
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploadState, setUploadState] = useState("idle");
+  const [uploadMessage, setUploadMessage] = useState("");
+  const [documents, setDocuments] = useState([]);
+  const [documentsState, setDocumentsState] = useState("loading");
+  const [documentsError, setDocumentsError] = useState("");
+  const fileInputRef = useRef(null);
 
   const checkConnection = useCallback(async (signal) => {
     setConnection({ state: "checking", message: "Checking the API connection…" });
@@ -57,11 +85,153 @@ function App() {
     }
   }, []);
 
+  const loadDocuments = useCallback(async (signal) => {
+    setDocumentsState("loading");
+    setDocumentsError("");
+
+    try {
+      const response = await fetch("/api/documents", { signal });
+      if (!response.ok) {
+        throw new Error(`Could not load study materials (${response.status}).`);
+      }
+
+      let result;
+      try {
+        result = await response.json();
+      } catch {
+        throw new Error("The document list response was invalid.");
+      }
+
+      if (
+        !result ||
+        typeof result !== "object" ||
+        !Array.isArray(result.documents) ||
+        result.documents.some(
+          (document) =>
+            !document ||
+            typeof document.id !== "string" ||
+            typeof document.filename !== "string" ||
+            typeof document.uploaded_at !== "string" ||
+            !Number.isFinite(Date.parse(document.uploaded_at)) ||
+            !Number.isSafeInteger(document.size_bytes) ||
+            document.size_bytes < 0,
+        )
+      ) {
+        throw new Error("The document list response was invalid.");
+      }
+
+      setDocuments(result.documents);
+      setDocumentsState("loaded");
+    } catch (error) {
+      if (error.name === "AbortError") {
+        return;
+      }
+
+      setDocumentsState("error");
+      setDocumentsError(
+        error instanceof Error ? error.message : "Could not load study materials.",
+      );
+    }
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     checkConnection(controller.signal);
+    loadDocuments(controller.signal);
     return () => controller.abort();
-  }, [checkConnection]);
+  }, [checkConnection, loadDocuments]);
+
+  function handleFileChange(event) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      event.target.value = "";
+      setSelectedFile(null);
+      setUploadState("error");
+      setUploadMessage("Choose a PDF file to continue.");
+      return;
+    }
+
+    if (file.size > maxUploadSizeBytes) {
+      event.target.value = "";
+      setSelectedFile(null);
+      setUploadState("error");
+      setUploadMessage(
+        `PDF files must be ${maxUploadSizeMegabytes} MB or smaller.`,
+      );
+      return;
+    }
+
+    setSelectedFile(file);
+    setUploadState("ready");
+    setUploadMessage("PDF ready to upload.");
+  }
+
+  async function handleUpload() {
+    if (!selectedFile || uploadState === "uploading") {
+      return;
+    }
+
+    setUploadState("uploading");
+    setUploadMessage("Uploading your PDF…");
+
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+
+    try {
+      const response = await fetch("/api/documents/upload", {
+        method: "POST",
+        body: formData,
+      });
+      let result = null;
+      try {
+        result = await response.json();
+      } catch {
+        if (response.ok) {
+          throw new Error(
+            formatUnexpectedUploadResponse(response.status, "was not valid JSON"),
+          );
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          formatUploadFailure(
+            response.status,
+            result && typeof result === "object" ? result.detail : undefined,
+          ),
+        );
+      }
+
+      if (!isExtractedPdfResponse(result)) {
+        throw new Error(
+          formatUnexpectedUploadResponse(
+            response.status,
+            "did not match the expected validation format",
+          ),
+        );
+      }
+
+      setUploadState("success");
+      setUploadMessage(
+        result.text_status === "no_text_found"
+          ? `${result.filename} was processed, but no selectable text was found.`
+          : result.text_status === "partial_text"
+            ? `Text was extracted from some pages of ${result.filename}.`
+            : `Text extracted from ${result.page_count} pages of ${result.filename}.`,
+      );
+      setSelectedFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    } catch (error) {
+      setUploadState("error");
+      setUploadMessage(getUploadConnectionError(error));
+    }
+  }
 
   return (
     <div className="app-shell">
@@ -85,13 +255,13 @@ function App() {
             </svg>
             Overview
           </a>
-          <span className="nav-link disabled" aria-disabled="true">
+          <a className="nav-link" href="#study-materials">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M5 4.5h14v15H5zM8 8h8M8 12h8M8 16h5" />
             </svg>
             Study materials
-            <span className="nav-soon">Soon</span>
-          </span>
+          </a>
+
           <span className="nav-link disabled" aria-disabled="true">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 3.5 14.2 9l5.8 2-5.8 2L12 19l-2.2-6L4 11l5.8-2L12 3.5Z" />
@@ -170,6 +340,104 @@ function App() {
             </div>
             <div className="hero-decoration decoration-top" aria-hidden="true">✳</div>
             <div className="hero-decoration decoration-bottom" aria-hidden="true">✦</div>
+          </section>
+
+          <section className="upload-section" aria-labelledby="upload-heading">
+            <div className="upload-copy">
+              <div className="eyebrow muted">START WITH YOUR MATERIALS</div>
+              <h2 id="upload-heading">Upload a study document</h2>
+              <p>Choose a PDF to add it to your learning workspace.</p>
+            </div>
+            <div className="upload-controls">
+              <label className="file-picker" htmlFor="pdf-file-input">
+                <input
+                  id="pdf-file-input"
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  onChange={handleFileChange}
+                  disabled={uploadState === "uploading"}
+                />
+                <span className="file-picker-icon" aria-hidden="true">↑</span>
+                <span className="file-picker-text">
+                  <strong>{selectedFile ? selectedFile.name : "Choose a PDF"}</strong>
+                  <span>
+                    {selectedFile
+                      ? "Ready when you are"
+                      : `PDF files only · up to ${maxUploadSizeMegabytes} MB`}
+                  </span>
+                </span>
+                <span className="browse-button">Browse files</span>
+              </label>
+              <button
+                className="upload-button"
+                type="button"
+                onClick={handleUpload}
+                disabled={!selectedFile || uploadState === "uploading"}
+              >
+                {uploadState === "uploading" ? "Uploading…" : "Upload PDF"}
+              </button>
+            </div>
+            <p className={`upload-message ${uploadState}`} role="status" aria-live="polite">
+              {uploadMessage || "Your file is checked as a PDF before it is accepted."}
+            </p>
+          </section>
+
+          <section
+            className="documents-section"
+            id="study-materials"
+            aria-labelledby="documents-heading"
+          >
+            <div className="section-heading">
+              <div>
+                <div className="eyebrow muted">YOUR LIBRARY</div>
+                <h2 id="documents-heading">Study materials</h2>
+              </div>
+              {documentsState === "loaded" && documents.length > 0 && (
+                <span className="document-count">
+                  {documents.length} {documents.length === 1 ? "document" : "documents"}
+                </span>
+              )}
+            </div>
+
+            {documentsState === "loading" && (
+              <p className="documents-message" role="status">Loading your documents…</p>
+            )}
+            {documentsState === "error" && (
+              <div className="documents-message error" role="status">
+                <span>{documentsError}</span>
+                <button
+                  className="retry-button"
+                  type="button"
+                  onClick={() => loadDocuments()}
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+            {documentsState === "loaded" && documents.length === 0 && (
+              <p className="documents-message">
+                No study materials yet. Upload a PDF to see it here.
+              </p>
+            )}
+            {documentsState === "loaded" && documents.length > 0 && (
+              <div className="documents-list">
+                {documents.map((document) => (
+                  <article className="document-card" key={document.id}>
+                    <span className="document-icon" aria-hidden="true">PDF</span>
+                    <span className="document-details">
+                      <strong title={document.filename}>{document.filename}</strong>
+                      <span>
+                        {new Date(document.uploaded_at).toLocaleString()}
+                        {" · "}
+                        {formatFileSize(document.size_bytes)}
+                      </span>
+                    </span>
+                    <span className="document-status">Saved</span>
+                  </article>
+                ))}
+              </div>
+            )}
           </section>
 
           <section className="start-section" id="getting-started">
