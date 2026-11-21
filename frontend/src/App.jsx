@@ -12,7 +12,10 @@ import {
   mergeDocument,
 } from "./uploadErrors";
 import { requestChatAnswer } from "./chatApi.js";
-import { requestAnswerAndClearDraft } from "./chatSubmission.js";
+import {
+  requestAnswerAndClearDraft,
+  submitChatFormOnEnter,
+} from "./chatSubmission.js";
 import {
   formatPageReferences,
   getDocumentSummary,
@@ -944,6 +947,7 @@ function App() {
                   id="chat-question"
                   value={chatDraft}
                   onChange={(event) => setChatDraft(event.target.value)}
+                  onKeyDown={submitChatFormOnEnter}
                   placeholder="Ask a question about your materials…"
                   maxLength={4000}
                   rows={2}

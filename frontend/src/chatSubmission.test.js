@@ -1,7 +1,68 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { requestAnswerAndClearDraft } from "./chatSubmission.js";
+import {
+  requestAnswerAndClearDraft,
+  submitChatFormOnEnter,
+} from "./chatSubmission.js";
+
+function keyboardEvent({ key = "Enter", shiftKey = false, isComposing = false } = {}) {
+  let preventDefaultCount = 0;
+  let requestSubmitCount = 0;
+
+  const event = {
+    key,
+    shiftKey,
+    nativeEvent: { isComposing },
+    preventDefault() {
+      preventDefaultCount += 1;
+    },
+    currentTarget: {
+      form: {
+        requestSubmit() {
+          requestSubmitCount += 1;
+        },
+      },
+    },
+  };
+
+  return {
+    event,
+    get preventDefaultCount() {
+      return preventDefaultCount;
+    },
+    get requestSubmitCount() {
+      return requestSubmitCount;
+    },
+  };
+}
+
+test("Enter submits the existing chat form", () => {
+  const keyboard = keyboardEvent();
+
+  submitChatFormOnEnter(keyboard.event);
+
+  assert.equal(keyboard.preventDefaultCount, 1);
+  assert.equal(keyboard.requestSubmitCount, 1);
+});
+
+test("Shift+Enter does not submit or prevent the newline", () => {
+  const keyboard = keyboardEvent({ shiftKey: true });
+
+  submitChatFormOnEnter(keyboard.event);
+
+  assert.equal(keyboard.preventDefaultCount, 0);
+  assert.equal(keyboard.requestSubmitCount, 0);
+});
+
+test("Enter during IME composition does not submit or prevent the key", () => {
+  const keyboard = keyboardEvent({ isComposing: true });
+
+  submitChatFormOnEnter(keyboard.event);
+
+  assert.equal(keyboard.preventDefaultCount, 0);
+  assert.equal(keyboard.requestSubmitCount, 0);
+});
 
 test("clears the draft after a successful chat response", async () => {
   const answer = { answer: "A clear answer." };
