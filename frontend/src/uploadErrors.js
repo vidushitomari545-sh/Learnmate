@@ -90,6 +90,37 @@ export function mergeDocumentPage(documents, incomingDocuments) {
   return [...documents, ...uniqueIncoming];
 }
 
+export function getDocumentLoadState({ append, cursor = null, error = null }) {
+  if (!error) {
+    return {
+      documentsState: "loaded",
+      documentsError: "",
+      paginationError: "",
+      failedCursor: null,
+    };
+  }
+
+  const message =
+    error instanceof Error ? error.message : "Could not load study materials.";
+  return append
+    ? {
+        documentsState: "loaded",
+        documentsError: "",
+        paginationError: message,
+        failedCursor: cursor,
+      }
+    : {
+        documentsState: "error",
+        documentsError: message,
+        paginationError: "",
+        failedCursor: null,
+      };
+}
+
+export function getDocumentPageRetryCursor(failedCursor, nextCursor) {
+  return failedCursor ?? nextCursor;
+}
+
 export function getDocumentCountAfterUpload(count, documents, incoming) {
   return count + Number(!documents.some((document) => document.id === incoming.id));
 }

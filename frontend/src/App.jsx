@@ -4,6 +4,8 @@ import remarkGfm from "remark-gfm";
 import {
   formatUnexpectedUploadResponse,
   formatUploadFailure,
+  getDocumentLoadState,
+  getDocumentPageRetryCursor,
   getDocumentCountAfterUpload,
   getIdempotencyKey,
   getUploadConnectionError,
@@ -119,6 +121,9 @@ function App() {
   const [nextCursor, setNextCursor] = useState(null);
   const [documentsState, setDocumentsState] = useState("loading");
   const [documentsError, setDocumentsError] = useState("");
+  const [paginationError, setPaginationError] = useState("");
+  const [failedCursor, setFailedCursor] = useState(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatDraft, setChatDraft] = useState("");
   const [chatSubmitting, setChatSubmitting] = useState(false);
@@ -129,6 +134,7 @@ function App() {
   const [summaryError, setSummaryError] = useState("");
   const fileInputRef = useRef(null);
   const idempotencyKeyRef = useRef(null);
+  const loadingMoreRef = useRef(false);
   const chatSubmittingRef = useRef(false);
   const chatRequestControllerRef = useRef(null);
   const summarySubmittingRef = useRef(false);
@@ -232,10 +238,19 @@ function App() {
   }, []);
 
   const loadDocuments = useCallback(async (signal, cursor = null, append = false) => {
+    if (append && loadingMoreRef.current) {
+      return;
+    }
+
     if (!append) {
       setDocumentsState("loading");
+      setDocumentsError("");
+      setPaginationError("");
+      setFailedCursor(null);
+    } else {
+      loadingMoreRef.current = true;
+      setIsLoadingMore(true);
     }
-    setDocumentsError("");
 
     try {
       const query = new URLSearchParams({ limit: "20" });
@@ -282,16 +297,26 @@ function App() {
       );
       setNextCursor(result.next_cursor);
       setDocumentCount(result.total_count);
-      setDocumentsState("loaded");
+      const loadState = getDocumentLoadState({ append });
+      setDocumentsState(loadState.documentsState);
+      setDocumentsError(loadState.documentsError);
+      setPaginationError(loadState.paginationError);
+      setFailedCursor(loadState.failedCursor);
     } catch (error) {
       if (error.name === "AbortError") {
         return;
       }
 
-      setDocumentsState("error");
-      setDocumentsError(
-        error instanceof Error ? error.message : "Could not load study materials.",
-      );
+      const loadState = getDocumentLoadState({ append, cursor, error });
+      setDocumentsState(loadState.documentsState);
+      setDocumentsError(loadState.documentsError);
+      setPaginationError(loadState.paginationError);
+      setFailedCursor(loadState.failedCursor);
+    } finally {
+      if (append) {
+        loadingMoreRef.current = false;
+        setIsLoadingMore(false);
+      }
     }
   }, []);
 
@@ -735,6 +760,11 @@ function App() {
                 ))}
               </div>
             )}
+            {documentsState === "loaded" && paginationError && (
+              <p className="documents-message error" role="alert">
+                {paginationError}
+              </p>
+            )}
             {summaryDocumentId && (
               <section
                 className="document-summary-panel"
@@ -854,9 +884,20 @@ function App() {
               <button
                 className="retry-button"
                 type="button"
-                onClick={() => loadDocuments(undefined, nextCursor, true)}
+                disabled={isLoadingMore}
+                onClick={() =>
+                  loadDocuments(
+                    undefined,
+                    getDocumentPageRetryCursor(failedCursor, nextCursor),
+                    true,
+                  )
+                }
               >
-                Load more documents
+                {isLoadingMore
+                  ? "Loading more…"
+                  : paginationError
+                    ? "Retry loading documents"
+                    : "Load more documents"}
               </button>
             )}
           </section>

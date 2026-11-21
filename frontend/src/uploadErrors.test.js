@@ -5,6 +5,8 @@ import {
   formatUnexpectedUploadResponse,
   formatUploadFailure,
   getDocumentCountAfterUpload,
+  getDocumentLoadState,
+  getDocumentPageRetryCursor,
   getIdempotencyKey,
   getUploadConnectionError,
   isExtractedPdfResponse,
@@ -120,6 +122,82 @@ test("appends a paginated document page without reversing or duplicating it", ()
   assert.deepEqual(
     mergeDocumentPage(current, page),
     [{ id: "newest" }, { id: "middle" }, { id: "older" }],
+  );
+});
+
+test("keeps the first page and retries a failed page with its original cursor", async () => {
+  const firstPage = {
+    documents: [{ id: "first" }, { id: "shared" }],
+    next_cursor: "page-two-cursor",
+    total_count: 4,
+  };
+  const secondPage = {
+    documents: [{ id: "second" }, { id: "shared" }],
+    next_cursor: null,
+    total_count: 4,
+  };
+  const requestedCursors = [];
+  let pageAttempts = 0;
+  const fetchPage = async (cursor) => {
+    requestedCursors.push(cursor);
+    pageAttempts += 1;
+    if (pageAttempts === 1) {
+      return firstPage;
+    }
+    if (pageAttempts === 2) {
+      throw new Error("Could not load study materials (503).");
+    }
+    return secondPage;
+  };
+
+  const loadedFirstPage = await fetchPage(null);
+  let documents = loadedFirstPage.documents;
+  let paginationState = getDocumentLoadState({ append: false });
+
+  try {
+    await fetchPage(loadedFirstPage.next_cursor);
+  } catch (error) {
+    paginationState = getDocumentLoadState({
+      append: true,
+      cursor: loadedFirstPage.next_cursor,
+      error,
+    });
+  }
+
+  assert.equal(paginationState.documentsState, "loaded");
+  assert.equal(paginationState.paginationError, "Could not load study materials (503).");
+  assert.deepEqual(documents, firstPage.documents);
+
+  const retryCursor = getDocumentPageRetryCursor(
+    paginationState.failedCursor,
+    loadedFirstPage.next_cursor,
+  );
+  const retriedPage = await fetchPage(retryCursor);
+  documents = mergeDocumentPage(documents, retriedPage.documents);
+  paginationState = getDocumentLoadState({ append: true });
+
+  assert.deepEqual(requestedCursors, [null, "page-two-cursor", "page-two-cursor"]);
+  assert.deepEqual(documents, [
+    { id: "first" },
+    { id: "shared" },
+    { id: "second" },
+  ]);
+  assert.equal(paginationState.paginationError, "");
+  assert.equal(paginationState.failedCursor, null);
+});
+
+test("initial document-list failures keep the existing full-list error state", () => {
+  assert.deepEqual(
+    getDocumentLoadState({
+      append: false,
+      error: new Error("Could not load study materials (500)."),
+    }),
+    {
+      documentsState: "error",
+      documentsError: "Could not load study materials (500).",
+      paginationError: "",
+      failedCursor: null,
+    },
   );
 });
 
