@@ -12,6 +12,7 @@ import {
   mergeDocument,
 } from "./uploadErrors";
 import { requestChatAnswer } from "./chatApi.js";
+import { requestAnswerAndClearDraft } from "./chatSubmission.js";
 import {
   formatPageReferences,
   getDocumentSummary,
@@ -454,7 +455,6 @@ function App() {
     chatSubmittingRef.current = true;
     setChatSubmitting(true);
     setChatError("");
-    setChatDraft("");
     setChatMessages((current) => [
       ...current,
       { id: crypto.randomUUID(), role: "user", content: question },
@@ -463,9 +463,13 @@ function App() {
     const controller = new AbortController();
     chatRequestControllerRef.current = controller;
     try {
-      const answer = await requestChatAnswer(question, {
-        signal: controller.signal,
-      });
+      const answer = await requestAnswerAndClearDraft(
+        () =>
+          requestChatAnswer(question, {
+            signal: controller.signal,
+          }),
+        () => setChatDraft(""),
+      );
       setChatMessages((current) => [
         ...current,
         { id: crypto.randomUUID(), role: "assistant", ...answer },
