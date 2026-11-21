@@ -4,8 +4,13 @@ import test from "node:test";
 import {
   formatUnexpectedUploadResponse,
   formatUploadFailure,
+  getDocumentCountAfterUpload,
+  getIdempotencyKey,
   getUploadConnectionError,
   isExtractedPdfResponse,
+  isStoredUploadResponse,
+  mergeDocument,
+  mergeDocumentPage,
 } from "./uploadErrors.js";
 
 test("formats unsupported file type with the backend detail and status", () => {
@@ -72,4 +77,77 @@ test("validates the extracted PDF response structure", () => {
     }),
     true,
   );
+});
+
+test("validates a stored upload response", () => {
+  assert.equal(
+    isStoredUploadResponse({
+      id: "document-id",
+      filename: "notes.pdf",
+      uploaded_at: "2026-10-31T10:00:00+00:00",
+      size_bytes: 123,
+      status: "stored",
+      page_count: 2,
+      text_status: "partial_text",
+    }),
+    true,
+  );
+  assert.equal(
+    isStoredUploadResponse({
+      filename: "notes.pdf",
+      size_bytes: 123,
+      status: "extracted",
+    }),
+    false,
+  );
+});
+
+test("merges a successful upload without duplicating its document id", () => {
+  const existing = { id: "old", filename: "old.pdf" };
+  const previousUpload = { id: "new", filename: "old-name.pdf" };
+  const retryResult = { id: "new", filename: "renamed.pdf" };
+
+  assert.deepEqual(
+    mergeDocument([existing, previousUpload], retryResult),
+    [retryResult, existing],
+  );
+});
+
+test("appends a paginated document page without reversing or duplicating it", () => {
+  const current = [{ id: "newest" }, { id: "middle" }];
+  const page = [{ id: "older" }, { id: "middle" }];
+
+  assert.deepEqual(
+    mergeDocumentPage(current, page),
+    [{ id: "newest" }, { id: "middle" }, { id: "older" }],
+  );
+});
+
+test("increments the library count only for a newly stored document", () => {
+  const documents = [{ id: "saved" }];
+
+  assert.equal(
+    getDocumentCountAfterUpload(1, documents, { id: "new" }),
+    2,
+  );
+  assert.equal(
+    getDocumentCountAfterUpload(1, documents, { id: "saved" }),
+    1,
+  );
+});
+
+test("reuses the same idempotency key for upload retries", () => {
+  let created = 0;
+  const firstKey = getIdempotencyKey(null, () => {
+    created += 1;
+    return "retry-key";
+  });
+  const retryKey = getIdempotencyKey(firstKey, () => {
+    created += 1;
+    return "different-key";
+  });
+
+  assert.equal(firstKey, "retry-key");
+  assert.equal(retryKey, firstKey);
+  assert.equal(created, 1);
 });

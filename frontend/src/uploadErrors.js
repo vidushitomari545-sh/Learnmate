@@ -55,6 +55,49 @@ export function isExtractedPdfResponse(result) {
   );
 }
 
+export function isStoredUploadResponse(result) {
+  return (
+    result !== null &&
+    typeof result === "object" &&
+    result.status === "stored" &&
+    typeof result.id === "string" &&
+    typeof result.filename === "string" &&
+    typeof result.uploaded_at === "string" &&
+    Number.isFinite(Date.parse(result.uploaded_at)) &&
+    Number.isSafeInteger(result.size_bytes) &&
+    result.size_bytes >= 0 &&
+    Number.isSafeInteger(result.page_count) &&
+    result.page_count >= 0 &&
+    ["text_found", "partial_text", "no_text_found"].includes(
+      result.text_status,
+    )
+  );
+}
+
+export function mergeDocument(documents, incoming) {
+  return [incoming, ...documents.filter((document) => document.id !== incoming.id)];
+}
+
+export function mergeDocumentPage(documents, incomingDocuments) {
+  const knownIds = new Set(documents.map((document) => document.id));
+  const uniqueIncoming = incomingDocuments.filter((document) => {
+    if (knownIds.has(document.id)) {
+      return false;
+    }
+    knownIds.add(document.id);
+    return true;
+  });
+  return [...documents, ...uniqueIncoming];
+}
+
+export function getDocumentCountAfterUpload(count, documents, incoming) {
+  return count + Number(!documents.some((document) => document.id === incoming.id));
+}
+
+export function getIdempotencyKey(currentKey, createKey = () => crypto.randomUUID()) {
+  return currentKey || createKey();
+}
+
 export function getUploadConnectionError(error) {
   if (error instanceof TypeError) {
     return "Server connection failed. Check that the backend is running and try again.";
